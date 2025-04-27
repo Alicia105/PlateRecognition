@@ -1,0 +1,7 @@
+src/*.dll
+src/*.exe
+.vscode/
+images/
+results/
+videos/
+models/
