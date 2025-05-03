@@ -19,6 +19,47 @@ inline float sigmoid(float x) {
     return 1.0f / (1.0f + exp(-x));
 }
 
+cv::Rect getUnpaddedAndScaledBox(int i, cv::Mat resizedFrame,cv::Mat output){
+
+    float input_w = 640.0f;
+    float input_h = 640.0f;
+
+    float r_w = input_w / (float)resizedFrame.cols;  // ~0.5 for 1280
+    float r_h = input_h / (float)resizedFrame.rows;  // ~0.89 for 720
+
+    float scale = min(r_w, r_h);
+
+    float new_unpad_w = scale * resizedFrame.cols;
+    float new_unpad_h = scale * resizedFrame.rows;
+
+    float pad_w = (input_w - new_unpad_w) / 2;
+    float pad_h = (input_h - new_unpad_h) / 2;
+
+    float pred_x = output.at<float>(i, 0);
+    float pred_y = output.at<float>(i, 1);
+    float pred_w = output.at<float>(i, 2);
+    float pred_h = output.at<float>(i, 3);
+
+    // YOLO outputs are relative to input_w/input_h
+    float box_x = (pred_x - pad_w) / scale;
+    float box_y = (pred_y - pad_h) / scale;
+
+    int box_w = static_cast<int>(pred_w / scale);
+    int box_h = static_cast<int>(pred_h / scale);
+
+    int topLeftX = static_cast<int>(box_x - box_w / 2);
+    int topLeftY = static_cast<int>(box_y - box_h / 2);
+
+    topLeftX = max(0, min(topLeftX, resizedFrame.cols - 1));
+    topLeftY = max(0, min(topLeftY, resizedFrame.rows - 1));
+    box_w = min(box_w, resizedFrame.cols - topLeftX);
+    box_h = min(box_h, resizedFrame.rows - topLeftY);
+
+    cv::Rect roi(topLeftX, topLeftY, box_w, box_h);
+ 
+    return roi;
+}
+
 vector<string> getClassNames(string filePath){
     vector<string> class_names;
     ifstream ifs(filePath);
@@ -28,24 +69,6 @@ vector<string> getClassNames(string filePath){
     }
     cout<<"Number of classes :"<<class_names.size()<<endl;
     return class_names;
-}
-
-vector<int> getRectCoordinates(int i,cv::Mat output,cv::Mat img){
-    vector<int> coordinates;
-    int centerX = static_cast<int>(output.at<float>(i, 0) * img.cols);
-    int centerY = static_cast<int>(output.at<float>(i, 1) * img.rows);
-    int w   = static_cast<int>(output.at<float>(i, 2) * img.cols);
-    int h  = static_cast<int>(output.at<float>(i, 3) * img.rows);
-        
-    int topLeftX = centerX - w / 2;
-    int topLeftY = centerY - h / 2;
-
-    coordinates.push_back(topLeftX);
-    coordinates.push_back(topLeftY);
-    coordinates.push_back(w);
-    coordinates.push_back(h);
-
-    return coordinates;
 }
 
 void drawBoundingBox(cv::Mat img,cv::Rect roi){
@@ -58,6 +81,7 @@ int main() {
     string pathToCarModel="../models/yolov8n.onnx";
     //string pathToPlateModel="../models/yolov8n.onnx";
     string classNameFilePath="../models/coco.names";
+    vector<string> wantedClasses={"car","motorbike","bus","truck"};  
 
     //string pathToPlateModel="../models/yolov8n.onnx";
 
@@ -96,7 +120,7 @@ int main() {
         cv::resize(frame,resizedFrame,cv::Size(resized_width,resized_height));
 
         if (frame.empty()) break;
-
+        
         cv::Mat resized_rgb;
         cv::cvtColor(resizedFrame, resized_rgb, cv::COLOR_BGR2RGB);
         
@@ -129,7 +153,7 @@ int main() {
         }
 
         if (outputs.empty()) {
-            std::cerr << "Error: Empty output from model." << std::endl;
+            cerr << "Error: Empty output from model." << endl;
             continue;
         }
 
@@ -140,11 +164,17 @@ int main() {
         output = output.t();
         cout<<"Output : [rows="<<output.rows<<" x cols="<<output.cols<<"]"<<endl;
 
-        float objectnessThreshold = 0.1;
+        float objectnessThreshold = 0.4;
+        float scoreThreshold = 0.5;
+
+        vector<cv::Rect> boundingBoxes;
+        vector<float> confidences;
+        vector<int> classIds;
 
         for(int i=0; i<output.rows; i++){
-            float objectness = output.at<float>(i,4);
-            float scoreThreshold = 0.5;
+            float objectness_raw = output.at<float>(i, 4);
+            float objectness = sigmoid(objectness_raw);
+            
             cout<<"Objectness="<<objectness<<endl;
 
             if(objectness<objectnessThreshold){
@@ -154,52 +184,61 @@ int main() {
             cv::Point classIdPoint;
             double confidence;
 
-            cv::Mat classes_scores = output.row(i).colRange(5,output.cols);
+            cv::Mat classes_scores = output.row(i).colRange(5, output.cols).clone();
+            for (int j = 0; j < classes_scores.cols; j++) {
+                classes_scores.at<float>(0, j) = sigmoid(classes_scores.at<float>(0, j));
+            }
+
             cv::minMaxLoc(classes_scores,0,&confidence,0,&classIdPoint);
 
             cout<<"Confidence="<<confidence<<endl;
-            //vector<cv::Rect> boundingBoxes;
-
+          
             if (confidence > scoreThreshold) {
 
-                vector<cv::Rect> boundingBoxes;
-                vector<int> coord = getRectCoordinates(i,output,resizedFrame);
-                
-                //Scaled bounding box
-                int scaled_topLeftX=static_cast<int>(round(coord[0]*resizedFrame.cols));
-                int scaled_topLeftY=static_cast<int>(round(coord[1]*resizedFrame.rows));
-                int scaled_width=static_cast<int>(round(coord[2]*resizedFrame.cols));
-                int scaled_height=static_cast<int>(round(coord[3]*resizedFrame.rows));
-        
-                // Save box, class, and confidence
                 string classDetected=class_names[classIdPoint.x];
-                cv::Rect roi(scaled_topLeftX,scaled_topLeftY,scaled_width,scaled_height);
-
-                //boundingBoxes.push_back(roi);
-                drawBoundingBox(resizedFrame,roi);
                 
-                /*cv::Mat blobPlate = cv::dnn::blobFromImage(resizedFrame, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
-                netPlate.setInput(blobPlate);
-                vector<cv::Mat> plateOutputs;
-                netPlate.forward(plateOutputs, netPlate.getUnconnectedOutLayersNames());
-                if (plateOutputs.empty()) {
-                    std::cerr << "Error: Empty output from plate model." << std::endl;
-                    continue;
-                }*/
+                for(auto name : wantedClasses){
+                    if (name==classDetected){
+                        //Scaled bounding box
+                        cv::Rect roi = getUnpaddedAndScaledBox(i,resizedFrame,output);
+                        boundingBoxes.push_back(roi);
+                        confidences.push_back(confidence);
+                        classIds.push_back(classIdPoint.x);
+                        /*cv::Mat blobPlate = cv::dnn::blobFromImage(resizedFrame, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
+                        netPlate.setInput(blobPlate);
+                        vector<cv::Mat> plateOutputs;
+                        netPlate.forward(plateOutputs, netPlate.getUnconnectedOutLayersNames());
+                        if (plateOutputs.empty()) {
+                            std::cerr << "Error: Empty output from plate model." << std::endl;
+                            continue;
+                        }*/               
+                        
+                    }
+                }              
                 
-                for(auto r : boundingBoxes){
-                    drawBoundingBox(resizedFrame,r);
-                }
-
+                
                 treated++;
             }
+        }
+
+        vector<int> indices;
+        float nmsThreshold = 0.3;
+        cv::dnn::NMSBoxes(boundingBoxes, confidences, scoreThreshold, nmsThreshold, indices);
+
+        // Draw only the selected boxes
+        for (int idx : indices) {
+            cv::Rect box = boundingBoxes[idx];
+            string classDetected = class_names[classIds[idx]];
+            drawBoundingBox(resizedFrame, box);
+            cv::putText(resizedFrame, classDetected, cv::Point(box.x, box.y - 10),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
         }
         
         cv::imshow("Original", resizedFrame);
         num++;
-
-        int k = cv::waitKey(1); // Wait for a keystroke in the window
+        int k = cv::waitKey(10); // Wait for a keystroke in the window
         if(k=='q'){break;}
+        if(num%5==0) continue;
     }
 
     cap.release();
