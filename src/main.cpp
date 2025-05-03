@@ -15,6 +15,10 @@ std::string outText = std::string(ocr->GetUTF8Text());*/
 
 using namespace std;
 
+inline float sigmoid(float x) {
+    return 1.0f / (1.0f + exp(-x));
+}
+
 vector<string> getClassNames(string filePath){
     vector<string> class_names;
     ifstream ifs(filePath);
@@ -48,7 +52,7 @@ void drawBoundingBox(cv::Mat img,cv::Rect roi){
     cv::rectangle(img,roi,cv::Scalar(255, 0, 0), 2);
 }
 
-/*int main() {
+int main() {
 
     string pathToVideo="../videos/2103099-uhd_3840_2160_30fps.mp4";
     string pathToCarModel="../models/yolov8n.onnx";
@@ -92,12 +96,15 @@ void drawBoundingBox(cv::Mat img,cv::Rect roi){
         cv::resize(frame,resizedFrame,cv::Size(resized_width,resized_height));
 
         if (frame.empty()) break;
+
+        cv::Mat resized_rgb;
+        cv::cvtColor(resizedFrame, resized_rgb, cv::COLOR_BGR2RGB);
         
-        cv::Mat blob = cv::dnn::blobFromImage(resizedFrame, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
+        cv::Mat blob=cv::dnn::blobFromImage(resized_rgb, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
         //cv::Mat blobPlate = cv::dnn::blobFromImage(frame, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
 
         //Check models parameters
-        /*cout << "Blob shape: [" << blob.size[0] << " x " << blob.size[1] << " x " << blob.size[2] << " x " << blob.size[3] << "]" << endl;
+        cout << "Blob shape: [" << blob.size[0] << " x " << blob.size[1] << " x " << blob.size[2] << " x " << blob.size[3] << "]" << endl;
         cv::dnn::Layer* layer = net.getLayer(net.getLayerNames()[0]);  // Check the first layer
         cout << "Layer name: " << layer->name << endl;
 
@@ -129,6 +136,8 @@ void drawBoundingBox(cv::Mat img,cv::Rect roi){
         //cv::Mat output = net.forward();
         
         cv::Mat output = outputs[0];
+        output = output.reshape(1, {84, 8400});  // 84 x 8400
+        output = output.t();
         cout<<"Output : [rows="<<output.rows<<" x cols="<<output.cols<<"]"<<endl;
 
         float objectnessThreshold = 0.1;
@@ -166,7 +175,8 @@ void drawBoundingBox(cv::Mat img,cv::Rect roi){
                 string classDetected=class_names[classIdPoint.x];
                 cv::Rect roi(scaled_topLeftX,scaled_topLeftY,scaled_width,scaled_height);
 
-                boundingBoxes.push_back(roi);
+                //boundingBoxes.push_back(roi);
+                drawBoundingBox(resizedFrame,roi);
                 
                 /*cv::Mat blobPlate = cv::dnn::blobFromImage(resizedFrame, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
                 netPlate.setInput(blobPlate);
@@ -175,7 +185,7 @@ void drawBoundingBox(cv::Mat img,cv::Rect roi){
                 if (plateOutputs.empty()) {
                     std::cerr << "Error: Empty output from plate model." << std::endl;
                     continue;
-                }
+                }*/
                 
                 for(auto r : boundingBoxes){
                     drawBoundingBox(resizedFrame,r);
@@ -206,9 +216,9 @@ void drawBoundingBox(cv::Mat img,cv::Rect roi){
 
     return 0;
     
-}*/
+}
 
-int main() {
+/*int main() {
 
     // Paths
     string pathToCarModel = "../models/yolov8n.onnx";
@@ -247,9 +257,6 @@ int main() {
     // Preprocess for model input
     cv::Mat blob = cv::dnn::blobFromImage(img_padded, 1.0 / 255.0, cv::Size(target_width,target_height), cv::Scalar(), true, false);
 
-    
-    //cv::Mat blob = cv::dnn::blobFromImage(resizedFrame,1.0 / 255.0, cv::Size(inputWidth, inputHeight), cv::Scalar(), true, false);
-
     // Set the input
     net.setInput(blob);
 
@@ -282,11 +289,8 @@ int main() {
         cout<<"Confidence="<<confidence<<endl;
         //vector<cv::Rect> boundingBoxes;
 
-        
-
         if (confidence > scoreThreshold) {
 
-            vector<cv::Rect> boundingBoxes;
             vector<int> coord = getRectCoordinates(i,output,img);
             
             //Scaled bounding box
@@ -300,7 +304,7 @@ int main() {
             cv::Rect roi(scaled_topLeftX,scaled_topLeftY,scaled_width,scaled_height);
             drawBoundingBox(img,roi);
             string label = class_names[classIdPoint.x] + " " + to_string(confidence).substr(0, 4);
-            cv::putText(img, label, cv::Point(scaled_topLeftX, scaled_topLeftY - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);*/
+            cv::putText(img, label, cv::Point(scaled_topLeftX, scaled_topLeftY - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
 
             // Scale the bounding box back to original size
             int scaled_topLeftX = static_cast<int>(round(coord[0] / scale_x));
@@ -328,6 +332,6 @@ int main() {
     cv::waitKey(0);
 
     return 0;
-}
+}*/
 
 
