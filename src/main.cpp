@@ -1,11 +1,12 @@
 #include <iostream>
 #include <fstream>
 #include <cmath>
+#include <vector>
+#include <getopt.h>
 
 #include <opencv2/opencv.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/highgui.hpp>
-#include <opencv2/imgproc.hpp>
+#include "../include/inference.h"
+
 //#include <tesseract/baseapi.h>
 //#include <leptonica/allheaders.h>
 
@@ -125,26 +126,23 @@ void drawProcessedNMS(cv::Mat resizedFrame,vector<string> class_names,vector<int
 
 int main() {
 
+    bool runOnGPU = false;
     string pathToVideo="../videos/2103099-uhd_3840_2160_30fps.mp4";
     string pathToCarModel="../models/yolov8n.onnx";
     string pathToPlateModel="../models/yolov8n_plate.onnx";
     string classNameFilePath="../models/coco.names";
-    vector<string> wantedClasses={"car"};  
-    //vector<string> wantedClasses={"person","bicycle","car","motorbike","bus","truck"};  
+    string classPlateFilePath="../models/plate.names"; 
+    vector<string> wantedClasses={"person","bicycle","car","motorbike","bus","truck"};  
     
-    //string pathToPlateModel="../models/yolov8n.onnx";
-
     cv::VideoCapture cap(pathToVideo);
 
     if (!cap.isOpened()) {
-        std::cerr << "Error: Could not open video stream.\n";
+        cerr << "Error: Could not open video stream.\n";
         return -1;
     }
 
-    cv::dnn::Net net = cv::dnn::readNetFromONNX(pathToCarModel);
-    cv::dnn::Net netPlate = cv::dnn::readNetFromONNX(pathToPlateModel);
-    vector<string> class_names=getClassNames(classNameFilePath);
-    vector<string> class_name_plate={"License_Plate"};
+    Inference inf(pathToCarModel, cv::Size(640, 640), classNameFilePath, runOnGPU);
+    Inference infPlate(pathToPlateModel, cv::Size(640, 640), classPlateFilePath, runOnGPU);
 
     float width=cap.get(cv::CAP_PROP_FRAME_WIDTH);
     float height=cap.get(cv::CAP_PROP_FRAME_HEIGHT);
@@ -153,18 +151,10 @@ int main() {
     int resized_width = 1280;
     int  resized_height = 720;
 
-    float x_scale=static_cast<float>(resized_width) /width;
-    float y_scale=static_cast<float>(resized_height) /height;
-    
-    cout<<"X_scale ="<<x_scale<<" , "<<"Y_scale ="<<y_scale<<endl;
-
     int treated=0;
     int dropped=0;
     int num=0;
 
-    //cv::Mat img = cv::imread(imagePath);
-
-    
     while (cap.isOpened()) {
 
         cv::Mat frame,resizedFrame;
@@ -173,48 +163,9 @@ int main() {
 
         if (frame.empty()) break;
         
-        cv::Mat resized_rgb;
-        cv::cvtColor(resizedFrame, resized_rgb, cv::COLOR_BGR2RGB);
-        
-        cv::Mat blob=cv::dnn::blobFromImage(resizedFrame, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
-        //cv::Mat blobPlate = cv::dnn::blobFromImage(frame, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
-
-        //Check models parameters
-        cout << "Blob shape: [" << blob.size[0] << " x " << blob.size[1] << " x " << blob.size[2] << " x " << blob.size[3] << "]" << endl;
-        cv::dnn::Layer* layer = net.getLayer(net.getLayerNames()[0]);  // Check the first layer
-        cout << "Layer name: " << layer->name << endl;
-
-        net.setInput(blob);
-      
-        vector<cv::Mat> outputs;
-        vector<string> outLayerNames = net.getUnconnectedOutLayersNames();
-        
-        cout << "Output layer names: " << endl;
-        for (const auto& layerName : outLayerNames) {
-            cout << layerName << endl;
-        }
-
-        net.forward(outputs, outLayerNames);
-        //net.forward(outputs, net.getUnconnectedOutLayersNames());
-
-        cout << "Number of outputs: " << outputs.size() << endl;
-        for (size_t i = 0; i < outputs.size(); i++) {
-            cout << "Output " << i << " shape: [" 
-                << outputs[i].rows << " x " 
-                << outputs[i].cols << "]" << endl;
-        }
-
-        if (outputs.empty()) {
-            cerr << "Error: Empty output from model." << endl;
-            continue;
-        }
-
-        //cv::Mat output = net.forward();
-        
-        cv::Mat output = outputs[0];
-        output = output.reshape(1, {84, 8400});  // 84 x 8400
-        output = output.t();
-        cout<<"Output : [rows="<<output.rows<<" x cols="<<output.cols<<"]"<<endl;
+        vector<Detection> output = inf.runInference(resizedFrame);
+        int detections = output.size();
+        cout << "Number of detections:" << detections <<endl;
 
         float objectnessThreshold = 0.4;
         float scoreThreshold = 0.5;
@@ -227,49 +178,27 @@ int main() {
         vector<float> confidencesPlates;
         vector<int> classIdsPlates;
 
-        for(int i=0; i<output.rows; i++){
-            float objectness_raw = output.at<float>(i, 4);
-            float objectness = sigmoid(objectness_raw);
-            
-            cout<<"Objectness="<<objectness<<endl;
+        for(int i=0; i<detections; ++i){
+            Detection detection = output[i];
 
-            if(objectness<objectnessThreshold){
-                dropped++;
-                continue;                
-            }
-            cv::Point classIdPoint;
-            double confidence;
+            for(auto name : wantedClasses){
+                if (name==detection.className){
 
-            cv::Mat classes_scores = output.row(i).colRange(5, output.cols).clone();
-            for (int j = 0; j < classes_scores.cols; j++) {
-                classes_scores.at<float>(0, j) = sigmoid(classes_scores.at<float>(0, j));
-            }
+                    cv::Rect box = detection.box;
+                    cv::Scalar color = detection.color;
 
-            cv::minMaxLoc(classes_scores,0,&confidence,0,&classIdPoint);
+                    // Detection box
+                    cv::rectangle(resizedFrame, box, color, 2);
 
-            cout<<"Confidence="<<confidence<<endl;
-          
-            if (confidence > scoreThreshold) {
+                    // Detection box text
+                    string classString = detection.className + ' ' + to_string(detection.confidence).substr(0, 4);
+                    cv::Size textSize = cv::getTextSize(classString, cv::FONT_HERSHEY_DUPLEX, 1, 2, 0);
+                    cv::Rect textBox(box.x, box.y - 40, textSize.width + 10, textSize.height + 20);
 
-                string classDetected=class_names[classIdPoint.x];
-                
-                for(auto name : wantedClasses){
-                    if (name==classDetected){
-                        //Scaled bounding box
-                        cv::Rect roi = getUnpaddedAndScaledBox(i,resizedFrame,output);
-                        /*int pred_x = static_cast<int>(output.at<float>(i, 0));
-                        int pred_y = static_cast<int>(output.at<float>(i, 1));
-                        int pred_w = static_cast<int>(output.at<float>(i, 2));
-                        int pred_h = static_cast<int>(output.at<float>(i, 3));
-
-                        cv::Rect roi(pred_x,pred_y,pred_w,pred_h);*/
-                        if(roi.width<=40 || roi.height<=40) continue;
-                        confidence*=objectness;
-                        boundingBoxes.push_back(roi);
-                        confidences.push_back(confidence);
-                        classIds.push_back(classIdPoint.x);
-                        
-                        cv::Mat imagePlate=resizedFrame(roi);
+                    cv::rectangle(resizedFrame, textBox, color, cv::FILLED);
+                    cv::putText(resizedFrame, classString, cv::Point(box.x + 5, box.y - 10), cv::FONT_HERSHEY_DUPLEX, 1, cv::Scalar(0, 0, 0), 2, 0);
+                    
+                    /*cv::Mat imagePlate=resizedFrame(roi);
                         cv::Mat blobPlate = cv::dnn::blobFromImage(imagePlate, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
                         netPlate.setInput(blobPlate);
                         vector<cv::Mat> plateOutputs;
@@ -300,31 +229,19 @@ int main() {
                             confidencesPlates.push_back(plateConfidence);
                             classIdsPlates.push_back(classIdPointPlate.x);
 
-                        }            
+                        }*/            
                         
-                    }
-                }     
+                }
+            }     
                 
-                treated++;
-            }
+            treated++;
+            
         }
-
-        vector<int> indices;
-        vector<int> indicesPlate;
-        float nmsThreshold = 0.3;
-
-        //perClassNMS(boundingBoxes,confidences,classIds,scoreThreshold,nmsThreshold,indices);
-        drawProcessedNMS(resizedFrame,class_name_plate,indicesPlate,boundingBoxesPlates,confidencesPlates,classIdsPlates,scoreThreshold,nmsThreshold);
-        /*for (int idx : indices) {
-            cv::rectangle(resizedFrame, boundingBoxes[idx], cv::Scalar(255, 0, 0), 2);
-            cv::putText(resizedFrame, class_names[classIds[idx]], boundingBoxes[idx].tl(), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,255,0), 1);
-        } */     
 
         cv::imshow("Original",resizedFrame);
         num++;
         int k = cv::waitKey(10); // Wait for a keystroke in the window
         if(k=='q'){break;}
-        //if(num%5==0) continue;
     }
 
     cap.release();
@@ -336,7 +253,6 @@ int main() {
 
     cout<<"Frame : [width="<<width<<" x height="<<height<<"]"<<endl;
     cout<<"FPS :"<<fps<<endl;
-    cout<<"X_scale ="<<x_scale<<" , "<<"Y_scale ="<<y_scale<<endl;
     cout<<"Number of images ="<<num<<" , "<<"Treated ="<<treated<<" , "<<"Dropped ="<<dropped<<endl;
 
     return 0;
