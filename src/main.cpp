@@ -1,6 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <cmath>
+
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
@@ -75,14 +76,61 @@ void drawBoundingBox(cv::Mat img,cv::Rect roi){
     cv::rectangle(img,roi,cv::Scalar(255, 0, 0), 2);
 }
 
+void perClassNMS(const vector<cv::Rect>& boxes,const vector<float>& scores,const vector<int>& classIds,float scoreThreshold,float nmsThreshold,vector<int>& indices){
+    // Group boxes by class
+    map<int, vector<int>> classToIndices;
+    for (size_t i = 0; i < classIds.size(); ++i) {
+        if (scores[i] >= scoreThreshold) {
+            classToIndices[classIds[i]].push_back(static_cast<int>(i));
+        }
+    }
+
+    // Apply NMS for each class
+    for (const auto& kv : classToIndices) {
+        int cls = kv.first;
+        const vector<int>& clsIndices = kv.second;
+
+        // Collect class-specific boxes and scores
+        vector<cv::Rect> clsBoxes;
+        vector<float> clsScores;
+        for (int idx : clsIndices) {
+            clsBoxes.push_back(boxes[idx]);
+            clsScores.push_back(scores[idx]);
+        }
+
+        // Perform OpenCV NMS
+        vector<int> clsNmsIndices;
+        cv::dnn::NMSBoxes(clsBoxes, clsScores, scoreThreshold, nmsThreshold, clsNmsIndices);
+
+        // Map back to original indices
+        for (int keptIdx : clsNmsIndices) {
+            indices.push_back(clsIndices[keptIdx]);
+        }
+    }
+}
+
+void drawProcessedNMS(cv::Mat resizedFrame,vector<string> class_names,vector<int> indices,vector<cv::Rect> boundingBoxes,vector<float> confidences,vector<int> classIds, float scoreThreshold, float nmsThreshold){
+    cv::dnn::NMSBoxes(boundingBoxes, confidences, scoreThreshold, nmsThreshold, indices);
+
+    // Draw only the selected boxes
+    for (int idx : indices) {
+        cv::Rect box = boundingBoxes[idx];
+        string classDetected = class_names[classIds[idx]];
+        drawBoundingBox(resizedFrame, box);
+        cv::putText(resizedFrame, classDetected, cv::Point(box.x, box.y - 10),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+    }
+
+}
+
 int main() {
 
     string pathToVideo="../videos/2103099-uhd_3840_2160_30fps.mp4";
     string pathToCarModel="../models/yolov8n.onnx";
-    //string pathToPlateModel="../models/yolov8n.onnx";
+    //string pathToPlateModel="../models/yolov8n_plate.onnx";
     string classNameFilePath="../models/coco.names";
-    vector<string> wantedClasses={"car","motorbike","bus","truck"};  
-
+    vector<string> wantedClasses={"person","bicycle","car","motorbike","bus","truck"};  
+    
     //string pathToPlateModel="../models/yolov8n.onnx";
 
     cv::VideoCapture cap(pathToVideo);
@@ -95,6 +143,7 @@ int main() {
     cv::dnn::Net net = cv::dnn::readNetFromONNX(pathToCarModel);
     //cv::dnn::Net netPlate = cv::dnn::readNetFromONNX(pathToPlateModel);
     vector<string> class_names=getClassNames(classNameFilePath);
+    //vector<string> class_name_plate={"License_Plate"};
 
     float width=cap.get(cv::CAP_PROP_FRAME_WIDTH);
     float height=cap.get(cv::CAP_PROP_FRAME_HEIGHT);
@@ -112,6 +161,8 @@ int main() {
     int dropped=0;
     int num=0;
 
+    //cv::Mat img = cv::imread(imagePath);
+
     
     while (cap.isOpened()) {
 
@@ -124,7 +175,7 @@ int main() {
         cv::Mat resized_rgb;
         cv::cvtColor(resizedFrame, resized_rgb, cv::COLOR_BGR2RGB);
         
-        cv::Mat blob=cv::dnn::blobFromImage(resized_rgb, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
+        cv::Mat blob=cv::dnn::blobFromImage(resizedFrame, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
         //cv::Mat blobPlate = cv::dnn::blobFromImage(frame, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
 
         //Check models parameters
@@ -171,6 +222,10 @@ int main() {
         vector<float> confidences;
         vector<int> classIds;
 
+        vector<cv::Rect> boundingBoxesPlates;
+        vector<float> confidencesPlates;
+        vector<int> classIdsPlates;
+
         for(int i=0; i<output.rows; i++){
             float objectness_raw = output.at<float>(i, 4);
             float objectness = sigmoid(objectness_raw);
@@ -201,44 +256,80 @@ int main() {
                     if (name==classDetected){
                         //Scaled bounding box
                         cv::Rect roi = getUnpaddedAndScaledBox(i,resizedFrame,output);
+                        /*int pred_x = static_cast<int>(output.at<float>(i, 0));
+                        int pred_y = static_cast<int>(output.at<float>(i, 1));
+                        int pred_w = static_cast<int>(output.at<float>(i, 2));
+                        int pred_h = static_cast<int>(output.at<float>(i, 3));
+
+                        cv::Rect roi(pred_x,pred_y,pred_w,pred_h);*/
+                        if(roi.width<=40 || roi.height<=40) continue;
+                        confidence*=objectness;
                         boundingBoxes.push_back(roi);
                         confidences.push_back(confidence);
                         classIds.push_back(classIdPoint.x);
-                        /*cv::Mat blobPlate = cv::dnn::blobFromImage(resizedFrame, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
+                        /*
+                        cv::Mat imagePlate=resizedFrame(roi);
+                        cv::Mat blobPlate = cv::dnn::blobFromImage(imagePlate, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
                         netPlate.setInput(blobPlate);
                         vector<cv::Mat> plateOutputs;
                         netPlate.forward(plateOutputs, netPlate.getUnconnectedOutLayersNames());
                         if (plateOutputs.empty()) {
-                            std::cerr << "Error: Empty output from plate model." << std::endl;
+                            cerr << "Error: Empty output from plate model." <<endl;
                             continue;
-                        }*/               
+                        }
+                        cv::Mat plateOutput = plateOutputs[0];
+                        cout<<"Output plate: [rows="<<plateOutput.rows<<" x cols="<<plateOutput.cols<<"]"<<endl;
+                        //maybe reshape ?
+
+                        //plateOutput = plateOutput.reshape(1, {6, 8400});  // 6 x 8400
+                        //plateOutput = plateOutput.t();
+                        for(int i=0; i<plateOutput.rows; i++){
+                            float plateObjectness_raw = output.at<float>(i, 4);
+                            float plateObjectness = sigmoid(plateObjectness_raw);
+                            if(objectness<objectnessThreshold){
+                                continue;                
+                            }
+                            cv::Point classIdPointPlate;
+                            double plateConfidence;
+
+                            float classes_score_plate = plateOutput.at<float>(i, plateOutput.cols-1).clone();
+                            classes_score_plate = sigmoid(classes_score_plate);
+
+                            classIdPointPlate.x=class_name_plate[0];
+                            plateConfidence=classes_score_plate;
+
+                            cv::Rect roiPlate = getUnpaddedAndScaledBox(i,imagePlate,plateOutput);
+                            cv::Rect corrected= cv::rect(roiPlate.x+roi.x,roiPlate.y+roi.y,roiPlate.width,roiPlate.height);
+
+                            boundingBoxesPlates.push_back(corrected);
+                            confidencesPlates.push_back(plateConfidence);
+                            classIdsPlates.push_back(classIdPointPlate.x);
+
+                        }  */            
                         
                     }
-                }              
-                
+                }     
                 
                 treated++;
             }
         }
 
         vector<int> indices;
+        //vector<int> indicesPlate;
         float nmsThreshold = 0.3;
-        cv::dnn::NMSBoxes(boundingBoxes, confidences, scoreThreshold, nmsThreshold, indices);
 
-        // Draw only the selected boxes
+        perClassNMS(boundingBoxes,confidences,classIds,scoreThreshold,nmsThreshold,indices);
+        //drawProcessedNMS(resizedFrame,class_name_plate,indicesPlate,boundingBoxesPlates,confidencesPlates,classIdsPlates,scoreThreshold,nmsThreshold);
         for (int idx : indices) {
-            cv::Rect box = boundingBoxes[idx];
-            string classDetected = class_names[classIds[idx]];
-            drawBoundingBox(resizedFrame, box);
-            cv::putText(resizedFrame, classDetected, cv::Point(box.x, box.y - 10),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
-        }
-        
-        cv::imshow("Original", resizedFrame);
+            cv::rectangle(resizedFrame, boundingBoxes[idx], cv::Scalar(255, 0, 0), 2);
+            cv::putText(resizedFrame, class_names[classIds[idx]], boundingBoxes[idx].tl(), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,255,0), 1);
+        }      
+
+        cv::imshow("Original",resizedFrame);
         num++;
         int k = cv::waitKey(10); // Wait for a keystroke in the window
         if(k=='q'){break;}
-        if(num%5==0) continue;
+        //if(num%5==0) continue;
     }
 
     cap.release();
@@ -254,22 +345,20 @@ int main() {
     cout<<"Number of images ="<<num<<" , "<<"Treated ="<<treated<<" , "<<"Dropped ="<<dropped<<endl;
 
     return 0;
-    
 }
+
+
 
 /*int main() {
 
-    // Paths
-    string pathToCarModel = "../models/yolov8n.onnx";
-    string imagePath = "../images/test.jpg";
+    string pathToCarModel="../models/yolov8n.onnx";
+    //string pathToPlateModel="../models/yolov8n_plate.onnx";
     string classNameFilePath="../models/coco.names";
+    vector<string> wantedClasses={"person","bicycle","car","motorbike","bus","truck"};
+    string imagePath = "../images/test.jpg";
     
-    // Load network
-    cv::dnn::Net net = cv::dnn::readNetFromONNX(pathToCarModel);
-    vector<string> class_names=getClassNames(classNameFilePath);
+    //string pathToPlateModel="../models/yolov8n.onnx";
 
-    // Load image
-   
     cv::Mat img = cv::imread(imagePath);
   
     if (img.empty()) {
@@ -277,100 +366,160 @@ int main() {
         return 1;
     }
 
-    int target_width = 640;
-    int target_height = 640;
+    cv::dnn::Net net = cv::dnn::readNetFromONNX(pathToCarModel);
+    //cv::dnn::Net netPlate = cv::dnn::readNetFromONNX(pathToPlateModel);
+    vector<string> class_names=getClassNames(classNameFilePath);
+    //vector<string> wantedClasses=getClassNames(classNameFilePath);
+    //vector<string> class_name_plate={"License_Plate"};
 
-    float scale_x = target_width / (float)img.cols;
-    float scale_y = target_height / (float)img.rows;
+    int resized_width = 638;
+    int  resized_height = 359;
 
-    float scale = min(scale_x, scale_y);
-    int new_width = int(img.cols * scale);
-    int new_height = int(img.rows * scale);
+    int treated=0;
+    int dropped=0;
+    int num=0;
 
-    cv::Mat img_resized;
-    cv::resize(img, img_resized, cv::Size(new_width, new_height));
+    cv::Mat resizedImg;
+        
+    cv::resize(img,resizedImg,cv::Size(resized_width,resized_height));
 
-    cv::Mat img_padded(target_height, target_width, img_resized.type(), cv::Scalar(0, 0, 0));
-    img_resized.copyTo(img_padded(cv::Rect(0, 0, new_width, new_height)));
+    cv::Mat blob=cv::dnn::blobFromImage(resizedImg, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
+        
+    //Check models parameters
+    cout << "Blob shape: [" << blob.size[0] << " x " << blob.size[1] << " x " << blob.size[2] << " x " << blob.size[3] << "]" << endl;
+    cv::dnn::Layer* layer = net.getLayer(net.getLayerNames()[0]);  // Check the first layer
+    cout << "Layer name: " << layer->name << endl;
 
-    // Preprocess for model input
-    cv::Mat blob = cv::dnn::blobFromImage(img_padded, 1.0 / 255.0, cv::Size(target_width,target_height), cv::Scalar(), true, false);
-
-    // Set the input
     net.setInput(blob);
-
-    // Forward pass
+      
     vector<cv::Mat> outputs;
-    net.forward(outputs, net.getUnconnectedOutLayersNames());
-    cv::Mat output=outputs[0];
+    vector<string> outLayerNames = net.getUnconnectedOutLayersNames();
+        
+    cout << "Output layer names: " << endl;
+    for (const auto& layerName : outLayerNames) {
+        cout << layerName << endl;
+    }
 
-    //cv::Mat output = net.forward();
-    //cv::Mat output = outputs[0];
+    net.forward(outputs, outLayerNames);
+    //net.forward(outputs, net.getUnconnectedOutLayersNames());
+
+    cout << "Number of outputs: " << outputs.size() << endl;
+    for (size_t i = 0; i < outputs.size(); i++) {
+        cout << "Output " << i << " shape: [" 
+            << outputs[i].rows << " x " 
+            << outputs[i].cols << "]" << endl;
+    }
+
+    if (outputs.empty()) {
+        cerr << "Error: Empty output from model." << endl;
+        return 1;
+    }
+        
+    cv::Mat output = outputs[0];
+    output = output.reshape(1, {84, 8400});  // 84 x 8400
+    output = output.t();
     cout<<"Output : [rows="<<output.rows<<" x cols="<<output.cols<<"]"<<endl;
 
-    float objectnessThreshold = 0.1;
-    float scoreThreshold = 0.4;
+    float objectnessThreshold = 0.5;
+    float scoreThreshold = 0.5;
+
+    vector<cv::Rect> boundingBoxes;
+    vector<float> confidences;
+    vector<int> classIds;
     
     for(int i=0; i<output.rows; i++){
-        float objectness = output.at<float>(i,4);
+        float objectness_raw = output.at<float>(i, 4);
+        float objectness = sigmoid(objectness_raw);
+            
         cout<<"Objectness="<<objectness<<endl;
 
         if(objectness<objectnessThreshold){
+            dropped++;
             continue;                
         }
-
         cv::Point classIdPoint;
         double confidence;
 
-        cv::Mat classes_scores = output.row(i).colRange(5,output.cols);
+        cv::Mat classes_scores = output.row(i).colRange(5, output.cols).clone();
+        for (int j = 0; j < classes_scores.cols; j++) {
+            classes_scores.at<float>(0, j) = sigmoid(classes_scores.at<float>(0, j));
+        }
+
         cv::minMaxLoc(classes_scores,0,&confidence,0,&classIdPoint);
 
         cout<<"Confidence="<<confidence<<endl;
-        //vector<cv::Rect> boundingBoxes;
-
+          
         if (confidence > scoreThreshold) {
 
-            vector<int> coord = getRectCoordinates(i,output,img);
-            
-            //Scaled bounding box
-            /*int scaled_topLeftX=static_cast<int>(round(coord[0]*img.cols));
-            int scaled_topLeftY=static_cast<int>(round(coord[1]*img.rows));
-            int scaled_width=static_cast<int>(round(coord[2]*img.cols));
-            int scaled_height=static_cast<int>(round(coord[3]*img.rows));
+            string classDetected=class_names[classIdPoint.x];
+                
+            for(auto name : wantedClasses){
+                if (name==classDetected){
+                    //Scaled bounding box
+                    cv::Rect roi = getUnpaddedAndScaledBox(i,resizedImg,output);
+                    /*int pred_x = static_cast<int>(output.at<float>(i, 0));
+                    int pred_y = static_cast<int>(output.at<float>(i, 1));
+                    int pred_w = static_cast<int>(output.at<float>(i, 2));
+                    int pred_h = static_cast<int>(output.at<float>(i, 3));
+                    cv::Rect roi(pred_x,pred_y,pred_w,pred_h);
 
-            // Save box, class, and confidence
-            
-            cv::Rect roi(scaled_topLeftX,scaled_topLeftY,scaled_width,scaled_height);
-            drawBoundingBox(img,roi);
-            string label = class_names[classIdPoint.x] + " " + to_string(confidence).substr(0, 4);
-            cv::putText(img, label, cv::Point(scaled_topLeftX, scaled_topLeftY - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+                    confidence*=objectness;
 
-            // Scale the bounding box back to original size
-            int scaled_topLeftX = static_cast<int>(round(coord[0] / scale_x));
-            int scaled_topLeftY = static_cast<int>(round(coord[1] / scale_y));
-            int scaled_width = static_cast<int>(round(coord[2] / scale_x));
-            int scaled_height = static_cast<int>(round(coord[3] / scale_y));
+                    if(roi.width<=40 || roi.height<=40) continue;
+                    boundingBoxes.push_back(roi);
+                    confidences.push_back(confidence);
+                    classIds.push_back(classIdPoint.x);    
+                        
+                }     
+                
+                treated++;
+            }
+        }   
+    }
 
-            // Account for padding by adjusting the coordinates
-            int padded_topLeftX = scaled_topLeftX;
-            int padded_topLeftY = scaled_topLeftY;
+    vector<int> indices;
+    //vector<int> indicesPlate;
+    float nmsThreshold = 0.2;
+    float threshold=0.25;
 
-            // Draw the bounding box on the image
-            cv::Rect roi(padded_topLeftX, padded_topLeftY, scaled_width, scaled_height);
-            drawBoundingBox(img, roi);
+    float nmsTh = 0.4;
+    float th=0.3;
 
-            // Label the box with class name and confidence
-            string label = class_names[classIdPoint.x] + " " + to_string(confidence).substr(0, 4);
-            cv::putText(img, label, cv::Point(padded_topLeftX, padded_topLeftY - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+    /*for(auto r: boundingBoxes){
+        drawBoundingBox(resizedImg,r);
+    }
 
-        }
+    vector<cv::Rect>clearedBoxes;
+    vector<float> clearedConfidences;
+    vector<int> clearedClassIds;
+    perClassNMS(boundingBoxes,confidences,classIds,threshold,nmsThreshold,indices);
 
+    for(int i : indices){
+        clearedBoxes.push_back(boundingBoxes[i]);
+        clearedConfidences.push_back(confidences[i]);
+        clearedClassIds.push_back(classIds[i]);
     }
     
-    cv::imshow("Original",img);
-    cv::waitKey(0);
+    vector<int> ind;
+
+    drawProcessedNMS(resizedImg,class_names,ind,clearedBoxes,clearedConfidences,clearedClassIds,th,nmsTh);
+    /*for (int idx : indices) {
+        cv::rectangle(resizedImg, boundingBoxes[idx], cv::Scalar(255, 0, 0), 2);
+        cv::putText(resizedImg, class_names[classIds[idx]], boundingBoxes[idx].tl(), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,255,0), 1);
+    }   
+
+    cv::imshow("Original",resizedImg);
+   
+    int k = cv::waitKey(0) & 0xFF;  // mask to get the lower 8 bits (important on some systems)
+    if (k == 'q') {
+        cv::destroyAllWindows();
+    }
+
+    // Save the image to disk
+    string s="../results/output.jpg";
+    cv::imwrite(s, resizedImg);
+    num++;
+    cout<<"Number of images ="<<num<<" , "<<"Treated ="<<treated<<" , "<<"Dropped ="<<dropped<<endl;
 
     return 0;
 }*/
-
-
