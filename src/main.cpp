@@ -127,9 +127,10 @@ int main() {
 
     string pathToVideo="../videos/2103099-uhd_3840_2160_30fps.mp4";
     string pathToCarModel="../models/yolov8n.onnx";
-    //string pathToPlateModel="../models/yolov8n_plate.onnx";
+    string pathToPlateModel="../models/yolov8n_plate.onnx";
     string classNameFilePath="../models/coco.names";
-    vector<string> wantedClasses={"person","bicycle","car","motorbike","bus","truck"};  
+    vector<string> wantedClasses={"car"};  
+    //vector<string> wantedClasses={"person","bicycle","car","motorbike","bus","truck"};  
     
     //string pathToPlateModel="../models/yolov8n.onnx";
 
@@ -141,9 +142,9 @@ int main() {
     }
 
     cv::dnn::Net net = cv::dnn::readNetFromONNX(pathToCarModel);
-    //cv::dnn::Net netPlate = cv::dnn::readNetFromONNX(pathToPlateModel);
+    cv::dnn::Net netPlate = cv::dnn::readNetFromONNX(pathToPlateModel);
     vector<string> class_names=getClassNames(classNameFilePath);
-    //vector<string> class_name_plate={"License_Plate"};
+    vector<string> class_name_plate={"License_Plate"};
 
     float width=cap.get(cv::CAP_PROP_FRAME_WIDTH);
     float height=cap.get(cv::CAP_PROP_FRAME_HEIGHT);
@@ -267,7 +268,7 @@ int main() {
                         boundingBoxes.push_back(roi);
                         confidences.push_back(confidence);
                         classIds.push_back(classIdPoint.x);
-                        /*
+                        
                         cv::Mat imagePlate=resizedFrame(roi);
                         cv::Mat blobPlate = cv::dnn::blobFromImage(imagePlate, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
                         netPlate.setInput(blobPlate);
@@ -278,34 +279,28 @@ int main() {
                             continue;
                         }
                         cv::Mat plateOutput = plateOutputs[0];
+                        plateOutput = plateOutput.reshape(1, {5, 8400});  // 5 x 8400
+                        plateOutput = plateOutput.t();
                         cout<<"Output plate: [rows="<<plateOutput.rows<<" x cols="<<plateOutput.cols<<"]"<<endl;
-                        //maybe reshape ?
 
-                        //plateOutput = plateOutput.reshape(1, {6, 8400});  // 6 x 8400
-                        //plateOutput = plateOutput.t();
                         for(int i=0; i<plateOutput.rows; i++){
-                            float plateObjectness_raw = output.at<float>(i, 4);
-                            float plateObjectness = sigmoid(plateObjectness_raw);
-                            if(objectness<objectnessThreshold){
+                            float plateConfidence_raw = output.at<float>(i, 4);
+                            float plateConfidence = sigmoid(plateConfidence_raw);
+                            cout<<"Plate Confidence="<<plateConfidence<<endl;
+                            if(plateConfidence<objectnessThreshold){
                                 continue;                
                             }
                             cv::Point classIdPointPlate;
-                            double plateConfidence;
-
-                            float classes_score_plate = plateOutput.at<float>(i, plateOutput.cols-1).clone();
-                            classes_score_plate = sigmoid(classes_score_plate);
-
-                            classIdPointPlate.x=class_name_plate[0];
-                            plateConfidence=classes_score_plate;
+                            classIdPointPlate.x=0;
 
                             cv::Rect roiPlate = getUnpaddedAndScaledBox(i,imagePlate,plateOutput);
-                            cv::Rect corrected= cv::rect(roiPlate.x+roi.x,roiPlate.y+roi.y,roiPlate.width,roiPlate.height);
+                            cv::Rect corrected= cv::Rect(roiPlate.x+roi.x,roiPlate.y+roi.y,roiPlate.width,roiPlate.height);
 
                             boundingBoxesPlates.push_back(corrected);
                             confidencesPlates.push_back(plateConfidence);
                             classIdsPlates.push_back(classIdPointPlate.x);
 
-                        }  */            
+                        }            
                         
                     }
                 }     
@@ -315,15 +310,15 @@ int main() {
         }
 
         vector<int> indices;
-        //vector<int> indicesPlate;
+        vector<int> indicesPlate;
         float nmsThreshold = 0.3;
 
-        perClassNMS(boundingBoxes,confidences,classIds,scoreThreshold,nmsThreshold,indices);
-        //drawProcessedNMS(resizedFrame,class_name_plate,indicesPlate,boundingBoxesPlates,confidencesPlates,classIdsPlates,scoreThreshold,nmsThreshold);
-        for (int idx : indices) {
+        //perClassNMS(boundingBoxes,confidences,classIds,scoreThreshold,nmsThreshold,indices);
+        drawProcessedNMS(resizedFrame,class_name_plate,indicesPlate,boundingBoxesPlates,confidencesPlates,classIdsPlates,scoreThreshold,nmsThreshold);
+        /*for (int idx : indices) {
             cv::rectangle(resizedFrame, boundingBoxes[idx], cv::Scalar(255, 0, 0), 2);
             cv::putText(resizedFrame, class_names[classIds[idx]], boundingBoxes[idx].tl(), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,255,0), 1);
-        }      
+        } */     
 
         cv::imshow("Original",resizedFrame);
         num++;
