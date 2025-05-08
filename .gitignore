@@ -1,6 +1,7 @@
 src/*.dll
 src/*.exe
 .vscode/
+.vs/
 images/
 results/
 videos/
@@ -8,3 +9,4 @@ models/
 src/mainONNX.py
 src/mainPT.py
 src/mainPTVideo.py
+
