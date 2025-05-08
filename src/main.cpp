@@ -43,7 +43,6 @@ double computeIoU(const cv::Rect& boxA, const cv::Rect& boxB) {
     return outText;
 }*/
 
-
 vector<string> getClassNames(string filePath){
     vector<string> class_names;
     ifstream ifs(filePath);
@@ -67,7 +66,7 @@ int main() {
     vector<string> allClasses=getClassNames( classNameFilePath);
     vector<string> wantedClasses={"person","bicycle","car","motorbike","bus","truck"}; 
     //vector<TrackableObject> activeObjects;
-    map<int,cv::Scalar> savedColors;
+    vector<cv::Scalar> savedColors;
     
     cv::VideoCapture cap(pathToVideo);
 
@@ -89,25 +88,24 @@ int main() {
     int treated=0;
     int dropped=0;
 
-    int id=0;
+    int numColors=10; //number of colors to draw boxes
     int numberOfFrame=0;
 
     float plateConfidenceThreshold=0.5;
     double IoUThreshold=0.5;
 
- 
     Sort::Ptr sortTracker = make_shared<Sort>(1, 3, 0.3f);
-
-
 
     while (cap.isOpened()) {
 
         cv::Mat frame,resizedFrame,detectionsMat;;
         cap >> frame;
-        cv::resize(frame,resizedFrame,cv::Size(resized_width,resized_height));
-        numberOfFrame++;
 
         if (frame.empty()) break;
+
+        cv::resize(frame,resizedFrame,cv::Size(resized_width,resized_height));
+        numberOfFrame++;
+      
         if(numberOfFrame%5==0) continue;
         
         vector<Detection> output = inf.runInference(resizedFrame);
@@ -127,11 +125,18 @@ int main() {
                     float center_x =box.x+box.width/2;
                     float center_y=box.y+box.height/2;
 
-                    cv::Mat row = (cv::Mat_<float>(1,6) << center_x, center_y, box.width, box.height, detection.confidence, 0);
-                    cv::vconcat(detectionsMat, row, detectionsMat);
-                    //if ;
-                    savedColors[id]=detection.color;
-                    id++;
+                    cv::Mat row = (cv::Mat_<float>(1,6) << center_x, center_y, box.width, box.height, detection.confidence, detection.class_id);
+
+                    if (detectionsMat.empty()) {
+                        detectionsMat = row; // first row
+                    } else {
+                        cv::vconcat(detectionsMat, row, detectionsMat); // append
+                    }
+                    
+                    if (savedColors.size()<numColors){
+                        savedColors.push_back(detection.color);
+                    }
+                    
                 }
             }
         }
@@ -157,13 +162,7 @@ int main() {
             cv::Rect bbox(top_left_x,top_left_y,w,h);
 
             string className=allClasses[static_cast<int>(class_id)];
-            cv::Scalar color;
-
-            if(savedColors.count(tracker_id)) color = savedColors[static_cast<int>(tracker_id)];
-
-            else cv::Scalar color(255,0,0);
-
-            validTrackerId.push_back(static_cast<int>(tracker_id));
+            cv::Scalar color=savedColors[static_cast<int>(tracker_id)%numColors];
 
             // Draw Vehicules Detection box text
             cv::rectangle(resizedFrame, bbox, color, 2);
@@ -202,18 +201,8 @@ int main() {
                 cv::rectangle(resizedFrame, textBoxPlate, plateColor, cv::FILLED);
                 cv::putText(resizedFrame, classStringPlate, cv::Point(plateBox.x + 5, plateBox.y - 10), cv::FONT_HERSHEY_DUPLEX, 1, cv::Scalar(0, 0, 0), 2, 0);
 
-                id=max(id,static_cast<int>(tracker_id));
             }
-
-            //Clean unnecessary colors
-            for(int l=0;l<id;l++){
-                for (auto v:validTrackerId){
-                    if(l!=v && savedColors.count(l)){
-                        savedColors.erase(l);
-                    }
-                }
-            }
-                     
+      
             treated++;  
         }
        
