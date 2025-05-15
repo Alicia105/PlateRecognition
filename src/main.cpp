@@ -2,12 +2,14 @@
 #include <fstream>
 #include <cmath>
 #include <vector>
+#include <map>
 #include <bits/stdc++.h>
 #include <opencv2/opencv.hpp>
 #include <opencv2/video.hpp>
 #include <opencv2/videoio.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/video/tracking.hpp>
+#include "../include/database.hpp"
 #include "../include/inference.h"
 #include "../include/sort.h"
 
@@ -15,6 +17,49 @@ using namespace std;
 using namespace sort;
 
 const string alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_";
+
+void updateSavedPlates(map<string,int>& plates, string license){
+
+    if(plates.empty() && license.length()==7){
+        plates[license]=1;
+    }
+
+    if(plates.count(license) && license.length()==7){
+        plates.at(license)++;
+    }
+}
+
+void updateSavedVehicles(map<string,string>& vehicles, string license, string vehicleType){
+    if(!vehicles.count(license) && license.length()==7){
+        vehicles[license]= vehicleType;
+    }
+}
+
+void cleanSavedPlates(map<string,int>& plates){
+    for(auto plate : plates){
+        if(plate.second<=3)plates.erase(plate.first);
+    }
+}
+
+void cleanSavedVehicles(map<string,int>& plates,map<string,string>& vehicles){
+    for(auto plate : plates){
+        if(!vehicles.count(plate.first)){
+            vehicles.erase(plate.first);
+        }
+    }
+}
+
+bool savePlateInDatabase(sqlite3* db,map<string,int>& plates,map<string,string>& vehicles){
+    bool r;
+    for(auto plate : plates){
+        if(plate.second>3){
+            string vehicle=vehicles.at(plate.first);
+            string plateText=plate.first;
+            r=insertPlate(db,vehicle,plateText);            
+        }
+    }
+    return r;
+}
 
 string generateName(){
     time_t timestamp = time(nullptr);
@@ -43,7 +88,7 @@ cv::Mat preprocessPlate(const cv::Mat& plate) {
     cv::resize(gray, resized, cv::Size(140, 70));
     cv::Mat blob = cv::dnn::blobFromImage(resized, 1.0, cv::Size(140, 70), cv::Scalar(), false, false, CV_8U); // NCHW
     blob=blob.reshape(1, {1, 70, 140, 1});
-    cout << "Blob type: " << blob.type() <<endl;
+    //cout << "Blob type: " << blob.type() <<endl;
     return blob;
 }
 
@@ -71,20 +116,20 @@ string decodeOutput(const cv::Mat& flat_output, const string& alphabet) {
 
 string recognizePlate(cv::dnn::Net& net, const cv::Mat& plate, const string& alphabet) {
     cv::Mat inputBlob = preprocessPlate(plate);
-    cout << "Blob shape: " << inputBlob.size << " Channels: " << inputBlob.channels() << endl;
+    //cout << "Blob shape: " << inputBlob.size << " Channels: " << inputBlob.channels() << endl;
     net.setInput(inputBlob);
     cv::Mat output = net.forward(); // shape [1, 9, 37], flattened to [9, 37]
    
     // Print number of dimensions
-    cout << "Output dims: " << output.dims << endl;
+    //cout << "Output dims: " << output.dims << endl;
 
     // Print each dimension
-    cout << "Output shape: [";
+    /*cout << "Output shape: [";
     for (int i = 0; i < output.dims; ++i) {
         std::cout << output.size[i];
         if (i < output.dims - 1) cout << ", ";
     }
-    std::cout << "]" << std::endl;
+    std::cout << "]" << std::endl;*/
 
     return decodeOutput(output,alphabet);
 }
@@ -100,21 +145,31 @@ vector<string> getClassNames(string filePath){
     return class_names;
 }
 
+
 int main() {
+
+    const string dbName = "../data/plates.db";
+    if (!createDatabase(dbName)) return 1;
+
+    sqlite3* db;
+    if (!openDatabase(dbName, &db)) return 1;
+
 
     bool runOnGPU = false;
     bool saveVideo = true;
     string pathToVideo="../videos/2103099-uhd_3840_2160_30fps.mp4";
     string pathToCarModel="../models/yolov8n.onnx";
     string pathToPlateModel="../models/yolov8n_plate.onnx";
-    //string pathToOcr="../models/crnn_tiny-plate.onnx";
     string pathToOcr="../models/global_mobile_vit_v2_ocr.onnx";
     string classNameFilePath="../models/coco.names";
     string classPlateFilePath="../models/plate.names"; 
 
-    vector<string> allClasses=getClassNames( classNameFilePath);
+    vector<string> allClasses=getClassNames(classNameFilePath);
     vector<string> wantedClasses={"person","bicycle","car","motorbike","bus","truck"}; 
     vector<cv::Scalar> savedColors;
+
+    map<string,int> savedPlates;
+    map<string,string> savedVehicles;
 
     cv::dnn::Net ocrNet = cv::dnn::readNetFromONNX(pathToOcr);
     
@@ -132,16 +187,17 @@ int main() {
     float height=cap.get(cv::CAP_PROP_FRAME_HEIGHT);
     float fps=cap.get(cv::CAP_PROP_FPS);
 
+    int resized_width = 1280;
+    int  resized_height = 720;
+
     string nameFile=generateName();
 
-    cv::VideoWriter writer(nameFile, cv::VideoWriter::fourcc('M','J','P','G'),fps,cv::Size(width, height));
+    cv::VideoWriter writer(nameFile, cv::VideoWriter::fourcc('m','p','4','v'),fps,cv::Size(resized_width,resized_height));
+
     if (!writer.isOpened()) {
         cerr << "Error: Cannot open the output file to write" << endl;
         saveVideo=false;
     }
-
-    int resized_width = 1280;
-    int  resized_height = 720;
 
     int treated=0;
     int dropped=0;
@@ -150,7 +206,7 @@ int main() {
     int numberOfFrame=0;
 
     float plateConfidenceThreshold=0.5;
-    float confidenceThreshold=0.5;
+    float confidenceThreshold=0.6;
 
     Sort::Ptr sortTracker = make_shared<Sort>(1, 3, 0.3f);
 
@@ -165,6 +221,14 @@ int main() {
         numberOfFrame++;
       
         if(numberOfFrame%5==0) continue;
+
+        if(numberOfFrame%12==0){ 
+            cleanSavedPlates(savedPlates);
+            cleanSavedVehicles(savedPlates,savedVehicles);
+            if(!savePlateInDatabase(db,savedPlates,savedVehicles)){
+                cerr << "Plates not inserted successfully"<<endl;
+            }
+        }
         
         vector<Detection> output = inf.runInference(resizedFrame);
         int detections = output.size();
@@ -177,7 +241,7 @@ int main() {
             Detection detection = output[i];
 
             for(auto name : wantedClasses){
-                if (name==detection.className && detection.confidence>plateConfidenceThreshold){
+                if (name==detection.className && detection.confidence>confidenceThreshold){
 
                     cv::Rect box=detection.box;
                     float center_x =box.x+box.width/2;
@@ -264,17 +328,23 @@ int main() {
                 if(plateDetection.confidence>0.7){
                     //OCR in Plate Detection box 
                     cv::Mat plateCropped = resizedFrame(plateBox);
-                    string text = recognizePlate(ocrNet, plateCropped,alphabet);
+                    string text = recognizePlate(ocrNet,plateCropped,alphabet);
 
-                    //Draw plate detection + OCR
-                    cv::Size textSizePlate = cv::getTextSize(text, cv::FONT_HERSHEY_DUPLEX, 1, 2, 0);
-                    cv::Rect textBoxPlate(plateBox.x, plateBox.y - 40, textSizePlate.width + 10, textSizePlate.height + 20);
-                    cv::rectangle(resizedFrame, textBoxPlate, plateColor, cv::FILLED);
-                    cv::putText(resizedFrame, text, cv::Point(plateBox.x + 5, plateBox.y - 10), cv::FONT_HERSHEY_DUPLEX, 1, cv::Scalar(0, 0, 0), 2, 0);
+                    if (text.length()>5){
+                        cv::Size textSizePlate = cv::getTextSize(text, cv::FONT_HERSHEY_DUPLEX, 1, 2, 0);
+                        cv::Rect textBoxPlate(plateBox.x, plateBox.y - 40, textSizePlate.width + 10, textSizePlate.height + 20);
+
+                        //Draw plate detection + OCR
+                        cv::rectangle(resizedFrame, textBoxPlate, plateColor, cv::FILLED);
+                        cv::putText(resizedFrame, text, cv::Point(plateBox.x + 5, plateBox.y - 10), cv::FONT_HERSHEY_DUPLEX, 1, cv::Scalar(0, 0, 0), 2, 0);
+                        updateSavedPlates(savedPlates,text);
+                        updateSavedVehicles(savedVehicles,text,plateDetection.className);
+                        
+
+                    }
+
                     cout<<text<<endl;
-
                 }
-
             }
       
             treated++;  
@@ -290,6 +360,7 @@ int main() {
     cap.release();
     writer.release();
     cv::destroyAllWindows();
+    sqlite3_close(db);
 
     width=static_cast<int>(width);
     height=static_cast<int>(height);
@@ -301,3 +372,25 @@ int main() {
 
     return 0;
 }
+
+
+/*void testCodec(const string& codecName, int fourcc, const string& filename) {
+    cv::VideoWriter writer;
+    writer.open(filename, fourcc, 30.0, cv::Size(640, 480));
+    if (writer.isOpened()) {
+        cout << codecName << " supported " << endl;
+        writer.release();
+        remove(filename.c_str()); // cleanup
+    } else {
+        cout << codecName << " not supported " << endl;
+    }
+}
+
+int main() {
+    testCodec("MP4V", cv::VideoWriter::fourcc('M','P','4','V'), "test.mp4");
+    testCodec("XVID", cv::VideoWriter::fourcc('X','V','I','D'), "test.avi");
+    testCodec("MJPG", cv::VideoWriter::fourcc('M','J','P','G'), "test.avi");
+    testCodec("AVC1", cv::VideoWriter::fourcc('A','V','C','1'), "test.mp4");
+    testCodec("H264", cv::VideoWriter::fourcc('H','2','6','4'), "test.mp4");
+    return 0;
+}*/
