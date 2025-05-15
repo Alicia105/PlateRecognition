@@ -6,6 +6,4 @@ images/
 results/
 videos/
 models/
-src/mainONNX.py
-src/mainPT.py
-src/mainPTVideo.py
+
