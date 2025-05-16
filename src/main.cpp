@@ -102,28 +102,36 @@ cv::Mat preprocessPlate(const cv::Mat& plate) {
 }
 
 // Decode the model output
-string decodeOutput(const cv::Mat& flat_output, const string& alphabet) {
+string decodeOutput(const cv::Mat& flat_output, const string& alphabet, float& avg_confidence) {
     const int num_slots = 9;
     const int num_classes = 37;
     std::string result;
+    std::vector<float> confidences;
 
     // Reshape the flat [1, 333] to [9, 37]
-    cv::Mat reshaped = flat_output.reshape(1, num_slots);  // shape becomes [9, 37]
+    cv::Mat reshaped = flat_output.reshape(1, num_slots);  // shape becomes [9, 37
 
     for (int i = 0; i < num_slots; ++i) {
         cv::Mat scores = reshaped.row(i);
         cv::Point classIdPoint;
-        double confidence;
-        cv::minMaxLoc(scores, 0, &confidence, 0, &classIdPoint);
+        double maxVal;
+        cv::minMaxLoc(scores, 0, &maxVal, 0, &classIdPoint);
         int classId = classIdPoint.x;
 
         char c = alphabet[classId];
-        if (c != '_') result += c;  // skip padding
+        if (c != '_') {
+            result += c;
+            confidences.push_back(static_cast<float>(maxVal));  // Softmax value
+        }
     }
+
+    // Calculate average confidence
+    avg_confidence = confidences.empty() ? 0.0f : accumulate(confidences.begin(), confidences.end(), 0.0f) / confidences.size();
+
     return result;
 }
 
-string recognizePlate(cv::dnn::Net& net, const cv::Mat& plate, const string& alphabet) {
+pair<string, float> recognizePlate(cv::dnn::Net& net, const cv::Mat& plate, const string& alphabet) {
     cv::Mat inputBlob = preprocessPlate(plate);
     //cout << "Blob shape: " << inputBlob.size << " Channels: " << inputBlob.channels() << endl;
     net.setInput(inputBlob);
@@ -140,7 +148,9 @@ string recognizePlate(cv::dnn::Net& net, const cv::Mat& plate, const string& alp
     }
     std::cout << "]" << std::endl;*/
 
-    return decodeOutput(output,alphabet);
+    float confidence = 0.0f;
+    string plateText = decodeOutput(output, alphabet, confidence);
+    return {plateText, confidence};
 }
 
 vector<string> getClassNames(string filePath){
@@ -181,6 +191,8 @@ int main() {
 
     map<string,int> savedPlates;
     map<string,string> savedVehicles;
+    map<int, pair<string, float>> bestPlates; //map<int, pair<string, float>> :tracker_id :int, plate:string, confidence:float
+
 
     cv::dnn::Net ocrNet = cv::dnn::readNetFromONNX(pathToOcr);
     
@@ -336,25 +348,32 @@ int main() {
                 if(plateDetection.confidence>0.7){
                     //OCR in Plate Detection box 
                     cv::Mat plateCropped = resizedFrame(plateBox);
-                    string text = recognizePlate(ocrNet,plateCropped,alphabet);
+                    auto [text, conf] = recognizePlate(ocrNet,plateCropped,alphabet);
+                    float highestConfidence = 0.5;
+                    if(!bestPlates.count(tracker_id) && text.length() == 7 && conf>highestConfidence){
+                        bestPlates[tracker_id] = {text, conf};
+                    }
+                    
+                    //map<int, pair<string, float>> :tracker_id :int, plate:string, confidence:float
+                    if (text.length() == 7 && conf > bestPlates[tracker_id].second) {
+                        bestPlates[tracker_id] = {text, conf};
+                    }
 
-                    if (text.length()==7){
-                        cv::Size textSizePlate = cv::getTextSize(text, cv::FONT_HERSHEY_DUPLEX, 1, 2, 0);
+                    if (bestPlates.count(tracker_id)) {
+                        string plateText=bestPlates[tracker_id].first; 
+                        cv::Size textSizePlate = cv::getTextSize(plateText, cv::FONT_HERSHEY_DUPLEX, 1, 2, 0);
                         cv::Rect textBoxPlate(plateBox.x, plateBox.y - 40, textSizePlate.width + 10, textSizePlate.height + 20);
 
                         //Draw plate detection + OCR
                         cv::rectangle(resizedFrame, textBoxPlate, plateColor, cv::FILLED);
-                        cv::putText(resizedFrame, text, cv::Point(plateBox.x + 5, plateBox.y - 10), cv::FONT_HERSHEY_DUPLEX, 1, cv::Scalar(0, 0, 0), 2, 0);
-                        updateSavedPlates(savedPlates,text);
-                        updateSavedVehicles(savedVehicles,text,className);                       
-
+                        cv::putText(resizedFrame, plateText, cv::Point(plateBox.x + 5, plateBox.y - 10), cv::FONT_HERSHEY_DUPLEX, 1, cv::Scalar(0, 0, 0), 2, 0);
+                        updateSavedPlates(savedPlates,plateText);
+                        updateSavedVehicles(savedVehicles,plateText,className);      
                     }
 
                     //cout<<text<<endl;
                 }
-            }
-      
-           
+            }  
         }
 
         cout<<"Number of frames ="<<numberOfFrame<<endl;
@@ -383,7 +402,6 @@ int main() {
 
     return 0;
 }
-
 
 /*void testCodec(const string& codecName, int fourcc, const string& filename) {
     cv::VideoWriter writer;
