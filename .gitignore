@@ -8,3 +8,5 @@ results/
 videos/
 models/
 data/
+build/
+CMakeLists.txt
