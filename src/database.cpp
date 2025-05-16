@@ -1,5 +1,4 @@
 #include <iostream>
-#include <sqlite3.h>
 #include <ctime>
 #include <string>
 #include "../include/database.hpp"
@@ -76,5 +75,27 @@ bool insertPlate(sqlite3* db, const string& vehicle,const string& plateText) {
 
     sqlite3_finalize(stmt);
     return true;
+}
+
+void printPlates(sqlite3* db) {
+    const char* sql = "SELECT id,timestamp,vehicle,plateText FROM plates;";
+    sqlite3_stmt* stmt;
+
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        cerr << "Select failed: " << sqlite3_errmsg(db) << endl;
+        return;
+    }
+
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        int id = sqlite3_column_int(stmt, 0);
+        const unsigned char* timestamp = sqlite3_column_text(stmt, 1);
+        const unsigned char* vehicle = sqlite3_column_text(stmt, 2);
+        const unsigned char* plateText = sqlite3_column_text(stmt, 3);
+
+        cout << id << " | " << timestamp << " | " << vehicle << " | " << plateText <<endl;
+    }
+
+    sqlite3_finalize(stmt);
 }
 

@@ -1,5 +1,6 @@
 src/*.dll
 src/*.exe
+src/*.o
 .vscode/
 .vs/
 images/

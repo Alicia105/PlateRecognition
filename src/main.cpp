@@ -18,14 +18,13 @@ using namespace sort;
 
 const string alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_";
 
-void updateSavedPlates(map<string,int>& plates, string license){
+void updateSavedPlates(map<string, int>& plates, string license) {
+    if (license.length() != 7) return;
 
-    if(plates.empty() && license.length()==7){
-        plates[license]=1;
-    }
-
-    if(plates.count(license) && license.length()==7){
+    if (plates.count(license)) {
         plates.at(license)++;
+    } else {
+        plates[license] = 1;
     }
 }
 
@@ -35,30 +34,40 @@ void updateSavedVehicles(map<string,string>& vehicles, string license, string ve
     }
 }
 
-void cleanSavedPlates(map<string,int>& plates){
-    for(auto plate : plates){
-        if(plate.second<=3)plates.erase(plate.first);
-    }
-}
-
-void cleanSavedVehicles(map<string,int>& plates,map<string,string>& vehicles){
-    for(auto plate : plates){
-        if(!vehicles.count(plate.first)){
-            vehicles.erase(plate.first);
+void cleanSavedPlates(map<string, int>& plates) {
+    for (auto it = plates.begin(); it != plates.end(); ) {
+        if (it->second <= 5) {
+            it = plates.erase(it);
+        } else {
+            ++it;
         }
     }
 }
 
-bool savePlateInDatabase(sqlite3* db,map<string,int>& plates,map<string,string>& vehicles){
-    bool r;
-    for(auto plate : plates){
-        if(plate.second>3){
-            string vehicle=vehicles.at(plate.first);
-            string plateText=plate.first;
-            r=insertPlate(db,vehicle,plateText);            
+void cleanSavedVehicles(const map<string, int>& plates, map<string, string>& vehicles) {
+    for (auto it = vehicles.begin(); it != vehicles.end(); ) {
+        if (!plates.count(it->first)) {
+            it = vehicles.erase(it);
+        } else {
+            ++it;
         }
     }
-    return r;
+}
+
+bool savePlateInDatabase(sqlite3* db, const map<string, int>& plates, const map<string, string>& vehicles) {
+    bool allSucceeded = true;
+
+    for (auto plate : plates) {
+        if (plate.second > 5) {
+            auto it = vehicles.find(plate.first);
+            if (it != vehicles.end()) {
+                bool r = insertPlate(db, it->second, plate.first);
+                allSucceeded = allSucceeded && r;
+            }
+        }
+    }
+
+    return allSucceeded;
 }
 
 string generateName(){
@@ -145,7 +154,6 @@ vector<string> getClassNames(string filePath){
     return class_names;
 }
 
-
 int main() {
 
     const string dbName = "../data/plates.db";
@@ -153,7 +161,6 @@ int main() {
 
     sqlite3* db;
     if (!openDatabase(dbName, &db)) return 1;
-
 
     bool runOnGPU = false;
     bool saveVideo = true;
@@ -206,7 +213,7 @@ int main() {
     int numberOfFrame=0;
 
     float plateConfidenceThreshold=0.5;
-    float confidenceThreshold=0.6;
+    float confidenceThreshold=0.7;
 
     Sort::Ptr sortTracker = make_shared<Sort>(1, 3, 0.3f);
 
@@ -220,9 +227,8 @@ int main() {
         cv::resize(frame,resizedFrame,cv::Size(resized_width,resized_height));
         numberOfFrame++;
       
-        if(numberOfFrame%5==0) continue;
-
-        if(numberOfFrame%12==0){ 
+        //if(numberOfFrame%5==0) dropped++ continue;
+        if(numberOfFrame%25==0){ 
             cleanSavedPlates(savedPlates);
             cleanSavedVehicles(savedPlates,savedVehicles);
             if(!savePlateInDatabase(db,savedPlates,savedVehicles)){
@@ -330,7 +336,7 @@ int main() {
                     cv::Mat plateCropped = resizedFrame(plateBox);
                     string text = recognizePlate(ocrNet,plateCropped,alphabet);
 
-                    if (text.length()>5){
+                    if (text.length()==7){
                         cv::Size textSizePlate = cv::getTextSize(text, cv::FONT_HERSHEY_DUPLEX, 1, 2, 0);
                         cv::Rect textBoxPlate(plateBox.x, plateBox.y - 40, textSizePlate.width + 10, textSizePlate.height + 20);
 
@@ -338,8 +344,7 @@ int main() {
                         cv::rectangle(resizedFrame, textBoxPlate, plateColor, cv::FILLED);
                         cv::putText(resizedFrame, text, cv::Point(plateBox.x + 5, plateBox.y - 10), cv::FONT_HERSHEY_DUPLEX, 1, cv::Scalar(0, 0, 0), 2, 0);
                         updateSavedPlates(savedPlates,text);
-                        updateSavedVehicles(savedVehicles,text,plateDetection.className);
-                        
+                        updateSavedVehicles(savedVehicles,text,className);                       
 
                     }
 
@@ -350,9 +355,11 @@ int main() {
             treated++;  
         }
 
+        cout<<"Number of images ="<<numberOfFrame<<endl;
+        
         if(saveVideo) writer.write(resizedFrame);
 
-        cv::imshow("Original",resizedFrame);
+        cv::imshow("Plate Recognition",resizedFrame);
         int k = cv::waitKey(10); // Wait for a keystroke in the window
         if(k=='q'){break;}
     }
@@ -360,7 +367,6 @@ int main() {
     cap.release();
     writer.release();
     cv::destroyAllWindows();
-    sqlite3_close(db);
 
     width=static_cast<int>(width);
     height=static_cast<int>(height);
@@ -369,6 +375,9 @@ int main() {
     cout<<"Frame : [width="<<width<<" x height="<<height<<"]"<<endl;
     cout<<"FPS :"<<fps<<endl;
     cout<<"Number of images ="<<numberOfFrame<<" , "<<"Treated ="<<treated<<" , "<<"Dropped ="<<dropped<<endl;
+
+    printPlates(db);
+    sqlite3_close(db);
 
     return 0;
 }
