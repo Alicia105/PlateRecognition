@@ -14,8 +14,9 @@ bool createDatabase(const string& dbName) {
     }
 
     const char* sql = "CREATE TABLE IF NOT EXISTS plates ("
-                      "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                      "timestamp TEXT, "
+                      "id INTEGER PRIMARY KEY, "
+                      "day TEXT, "
+                      "time TEXT, "
                       "vehicle TEXT, "
                       "plateText TEXT UNIQUE);";
 
@@ -42,7 +43,7 @@ bool openDatabase(const string& dbName, sqlite3** db) {
 
 // Function to insert a plate detection
 bool insertPlate(sqlite3* db, const string& vehicle,const string& plateText) {
-    string sql = "INSERT OR IGNORE INTO plates (timestamp,vehicle,plateText) VALUES (?, ?, ?);";
+    string sql = "INSERT OR IGNORE INTO plates (day,time,vehicle,plateText) VALUES (?,?,?,?);";
     sqlite3_stmt* stmt;
 
     if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
@@ -57,15 +58,22 @@ bool insertPlate(sqlite3* db, const string& vehicle,const string& plateText) {
         cerr << "ERROR: localtime_s() failed"<<endl;
     }
 
+    char day[50];
+    size_t count = strftime(day, sizeof(day), "%d-%m-%Y", &datetime);
+
     char timestamp[50];
-    size_t count = strftime(timestamp, sizeof(timestamp), "%d-%m-%Y %H-%M-%S", &datetime);
-    if (count == 0) {
+    size_t ct = strftime(timestamp, sizeof(timestamp), "%H-%M-%S", &datetime);
+
+    if (count == 0 || ct == 0) {
         cerr << "ERROR: strftime() failed"<<endl;
     }
-    
-    sqlite3_bind_text(stmt, 1, string(timestamp).c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, vehicle.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 3, plateText.c_str(), -1, SQLITE_STATIC);
+
+    cout << "Attempting to insert plate: " << plateText << endl;
+
+    sqlite3_bind_text(stmt, 1, string(day).c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, string(timestamp).c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, vehicle.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 4, plateText.c_str(), -1, SQLITE_STATIC);
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         cerr << "Insert failed: " << sqlite3_errmsg(db) << endl;
@@ -73,12 +81,21 @@ bool insertPlate(sqlite3* db, const string& vehicle,const string& plateText) {
         return false;
     }
 
+    else {
+        if (sqlite3_changes(db) > 0) {
+            sqlite3_int64 rowId = sqlite3_last_insert_rowid(db);
+            cout << "Insert succeeded: Id " << rowId << " added." << endl;
+        } else {
+            cout << "Insert ignored: plate already exists." << endl;
+        }
+    }
+
     sqlite3_finalize(stmt);
     return true;
 }
 
 void printPlates(sqlite3* db) {
-    const char* sql = "SELECT id,timestamp,vehicle,plateText FROM plates;";
+    const char* sql = "SELECT id,day,time,vehicle,plateText FROM plates;";
     sqlite3_stmt* stmt;
 
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
@@ -89,11 +106,12 @@ void printPlates(sqlite3* db) {
 
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         int id = sqlite3_column_int(stmt, 0);
-        const unsigned char* timestamp = sqlite3_column_text(stmt, 1);
-        const unsigned char* vehicle = sqlite3_column_text(stmt, 2);
-        const unsigned char* plateText = sqlite3_column_text(stmt, 3);
+        const unsigned char* day = sqlite3_column_text(stmt, 1);
+        const unsigned char* timestamp = sqlite3_column_text(stmt, 2);
+        const unsigned char* vehicle = sqlite3_column_text(stmt, 3);
+        const unsigned char* plateText = sqlite3_column_text(stmt, 4);
 
-        cout << id << " | " << timestamp << " | " << vehicle << " | " << plateText <<endl;
+        cout << id << " | " <<day << " | " << timestamp << " | " << vehicle << " | " << plateText <<endl;
     }
 
     sqlite3_finalize(stmt);

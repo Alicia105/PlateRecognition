@@ -157,7 +157,11 @@ vector<string> getClassNames(string filePath){
 int main() {
 
     const string dbName = "../data/plates.db";
-    if (!createDatabase(dbName)) return 1;
+
+    if (createDatabase(dbName)) {
+        cout << "Database created successfully." << endl;
+    }
+    else return 1;
 
     sqlite3* db;
     if (!openDatabase(dbName, &db)) return 1;
@@ -206,9 +210,6 @@ int main() {
         saveVideo=false;
     }
 
-    int treated=0;
-    int dropped=0;
-
     int numColors=10; //number of colors to draw boxes
     int numberOfFrame=0;
 
@@ -227,7 +228,8 @@ int main() {
         cv::resize(frame,resizedFrame,cv::Size(resized_width,resized_height));
         numberOfFrame++;
       
-        //if(numberOfFrame%5==0) dropped++ continue;
+        //if(numberOfFrame%5==0)  continue;
+
         if(numberOfFrame%25==0){ 
             cleanSavedPlates(savedPlates);
             cleanSavedVehicles(savedPlates,savedVehicles);
@@ -348,14 +350,14 @@ int main() {
 
                     }
 
-                    cout<<text<<endl;
+                    //cout<<text<<endl;
                 }
             }
       
-            treated++;  
+           
         }
 
-        cout<<"Number of images ="<<numberOfFrame<<endl;
+        cout<<"Number of frames ="<<numberOfFrame<<endl;
         
         if(saveVideo) writer.write(resizedFrame);
 
@@ -374,7 +376,7 @@ int main() {
 
     cout<<"Frame : [width="<<width<<" x height="<<height<<"]"<<endl;
     cout<<"FPS :"<<fps<<endl;
-    cout<<"Number of images ="<<numberOfFrame<<" , "<<"Treated ="<<treated<<" , "<<"Dropped ="<<dropped<<endl;
+    cout<<"Number of video frames processed="<<numberOfFrame<<endl;
 
     printPlates(db);
     sqlite3_close(db);
