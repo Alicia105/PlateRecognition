@@ -10,8 +10,8 @@
 #include <opencv2/core.hpp>
 #include <opencv2/video/tracking.hpp>
 #include "../include/database.hpp"
-#include "../include/inference.h"
-#include "../include/sort.h"
+#include "../external/inference/inference.h"
+#include "../external/sort/include/sort.h"
 
 using namespace std;
 using namespace sort;

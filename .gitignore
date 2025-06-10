@@ -9,4 +9,5 @@ videos/
 models/
 data/
 build/
+external/
 CMakeLists.txt

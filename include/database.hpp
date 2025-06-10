@@ -2,7 +2,7 @@
 #define DATABASE_HPP
 
 extern "C" {
-    #include "../include/sqlite3.h"
+    #include "../external/sqlite/sqlite3.h"
 }
 
 #include <iostream>
